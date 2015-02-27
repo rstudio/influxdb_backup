@@ -1,4 +1,4 @@
 influxdb_backup
 ===============
 
-Backup Influxdb
+A cli to backing up influxdb into json files.
