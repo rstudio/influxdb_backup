@@ -1,0 +1,7 @@
+development:
+    host: http://localhost
+    port: 8083
+    username: root
+    password: root
+    db_regex: 'db_name'
+    table_regex: '/.*/'
