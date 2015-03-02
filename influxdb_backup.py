@@ -9,7 +9,7 @@ Usage:
 Options:
   -h --help                 Show this screen.
   -v --version              Show version.
-  -v --config=<config>      Configuration file [default: ~/.influxdb_backup.yaml].
+  -c --config=<config>      Configuration file [default: ~/.influxdb_backup.yaml].
   -i --incremental=<incr>   Time interval to backup into (ie 8h, 1d, 6m) [default: 1d].
   -f --full                 Do full backup.
   -o --overwrite            Overwrite backup files.
