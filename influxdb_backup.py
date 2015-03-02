@@ -26,7 +26,7 @@ import os
 import sys
 import re
 import datetime
-import simplejson as json
+import json
 from multiprocessing import Pool
 import time
 
