@@ -135,14 +135,14 @@ if __name__ == '__main__':
 
     ### Load config file ###
     # set default config file is none given
-    if not args['FILE']:
-        args['FILE'] = '~/.influxdb_backup.yaml'
+    if not args['--config']:
+        args['--config'] = '~/.influxdb_backup.yaml'
     # check if config file exists
-    if not os.path.isfile(args['FILE']):
+    if not os.path.isfile(args['--config']):
         print "Could not file configuration file. Use `-c` or create config at `~/.influxdb_backup.yaml`"
         sys.exit(1)
     # load config file
-    with open(args['FILE']) as f:
+    with open(args['--config']) as f:
         config = yaml.safe_load(f)
     ######
 
