@@ -64,10 +64,13 @@ def backup(start_date, path, url, auth, params):
             for chunk in response.iter_content():
                 # if chuck has data, write to file.
                 if chunk:
-                    # We replace "}{" in chunk so that each chunk is written
-                    # to its own line in the resulting file. This makes it easy
-                    # via pythonic xreadlines() to iterate over each chunk to restore
-                    j.write(chunk.replace("}{", "}\n{"))
+                    # We ensure each complete json text is written to its own line. 
+                    # This makes it easy to restore these files in a scalable wasy
+                    # via xreadlines()
+                    if chunk.endswith("}"):
+                        j.write(chunk + "\n")
+                    else:
+                        j.write(chunk)
     except Exception as ex:
         print "INFLUXDB REQUEST FAILED"
         print sys.exc_info()
@@ -114,6 +117,7 @@ def pre_process_backup(db, path, conf, chunked=True):
             elif args['--incremental'][-1] == 'M':
                 start_date = end_date - dateutil.relativedelta.relativedelta(months=1)
             params={
+                'chunked': str(chunked).lower(),
                 'q': "select * from %s where time > %ss and time < %ss" % (conf['table_regex'],
                                                                             start_date.strftime('%s'),
                                                                             end_date.strftime('%s'))
