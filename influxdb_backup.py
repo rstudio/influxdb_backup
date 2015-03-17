@@ -57,25 +57,32 @@ def backup(start_date, path, url, auth, params):
         session.mount("http://", requests.adapters.HTTPAdapter(max_retries=retries))
     try:
         print "Pulling: %s" % start_date
-        response = session.get(url, auth=auth, params=params)
+        response = session.get(url, auth=auth, params=params, stream=True)
         response.raise_for_status()
         print "Writing: %s.json (%s)" % (start_date.strftime('%s'), start_date)
         with open(path, 'w') as j:
-            json.dump(response.json(), j)
+            for chunk in response.iter_content():
+                # if chuck has data, write to file.
+                if chunk:
+                    # We replace "}{" in chunk so that each chunk is written
+                    # to its own line in the resulting file. This makes it easy
+                    # via pythonic xreadlines() to iterate over each chunk to restore
+                    j.write(chunk.replace("}{", "}\n{"))
     except Exception as ex:
         print "INFLUXDB REQUEST FAILED"
         print sys.exc_info()
         if os.path.isfile(path):
             os.remove(path)
 
-def pre_process_backup(db, path, conf):
+def pre_process_backup(db, path, conf, chunked=True):
     pool = Pool(int(args['--workers']))
     results = []
     auth=(conf['username'], conf['password'])
     url='%s:%d/db/%s/series' % (conf['host'], conf['port'], db)
     if args['--full']:
         params={
-            'q': "select * from %s" % (conf['table_regex'])
+            'q': "select * from %s" % (conf['table_regex']),
+            'chunked': str(chunked).lower()
         }
         working_dir = '%s/%s/full' % (path, db)
         if not os.path.isdir(working_dir):
