@@ -3,6 +3,7 @@
 
 Usage:
   influxdb_backup.py backup [-c FILE] [-i INTERVAL | -f ] [-o] [-t DIR] [-w WORKERS]
+  influxdb_backup.py restore [-c FILE] [-w WORKERS]
   influxdb_backup.py (-h | --help)
   influxdb_backup.py --version
 
@@ -26,7 +27,6 @@ import os
 import sys
 import re
 import datetime
-import json
 from multiprocessing import Pool
 import time
 
@@ -36,6 +36,10 @@ INCR_MAP = {
     "d": "daily",
     "M": "monthly"
 }
+
+# collect stdin (if any)
+INPUT = [] if sys.stdin.isatty() else [y.strip() for y in sys.stdin.readlines()]
+
 
 def get_dbs(conf):
     print "Getting list of databases..."
@@ -48,9 +52,10 @@ def get_dbs(conf):
     print "done."
     return dbs
 
+
 def backup(start_date, path, url, auth, params):
     session = requests.Session()
-    retries=5
+    retries = 5
     if url.startswith('https'):
         session.mount("https://", requests.adapters.HTTPAdapter(max_retries=retries))
     else:
@@ -77,13 +82,36 @@ def backup(start_date, path, url, auth, params):
         if os.path.isfile(path):
             os.remove(path)
 
+
+def _get_end_date():
+    if args['--incremental'][-1] == 'm':
+        return datetime.datetime.now().replace(second=0, microsecond=0)
+    elif args['--incremental'][-1] == 'h':
+        return datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
+    elif args['--incremental'][-1] == 'd':
+        return datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    elif args['--incremental'][-1] == 'M':
+        return datetime.datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _get_start_date(end_date):
+    if args['--incremental'][-1] == 'm':
+        return end_date - dateutil.relativedelta.relativedelta(minutes=1)
+    elif args['--incremental'][-1] == 'h':
+        return end_date - dateutil.relativedelta.relativedelta(hours=1)
+    elif args['--incremental'][-1] == 'd':
+        return end_date - dateutil.relativedelta.relativedelta(days=1)
+    elif args['--incremental'][-1] == 'M':
+        return end_date - dateutil.relativedelta.relativedelta(months=1)
+
+
 def pre_process_backup(db, path, conf, chunked=True):
     pool = Pool(int(args['--workers']))
     results = []
-    auth=(conf['username'], conf['password'])
-    url='%s:%d/db/%s/series' % (conf['host'], conf['port'], db)
+    auth = (conf['username'], conf['password'])
+    url = '%s:%d/db/%s/series' % (conf['host'], conf['port'], db)
     if args['--full']:
-        params={
+        params = {
             'q': "select * from %s" % (conf['table_regex']),
             'chunked': str(chunked).lower()
         }
@@ -96,31 +124,17 @@ def pre_process_backup(db, path, conf, chunked=True):
     else:
         count = int(re.sub('[^0-9]', '', args['--incremental']))
         interval = INCR_MAP[args['--incremental'][-1]] or None
-        if args['--incremental'][-1] == 'm':
-            end_date = datetime.datetime.now().replace(second=0, microsecond=0)
-        elif args['--incremental'][-1] == 'h':
-            end_date = datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
-        elif args['--incremental'][-1] == 'd':
-            end_date = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        elif args['--incremental'][-1] == 'M':
-            end_date = datetime.datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = _get_end_date()
         working_dir = '%s/%s/%s' % (path, db, interval)
         if not os.path.isdir(working_dir):
             os.makedirs(working_dir)
         for _ in range(count):
-            if args['--incremental'][-1] == 'm':
-                start_date = end_date - dateutil.relativedelta.relativedelta(minutes=1)
-            elif args['--incremental'][-1] == 'h':
-                start_date = end_date - dateutil.relativedelta.relativedelta(hours=1)
-            elif args['--incremental'][-1] == 'd':
-                start_date = end_date - dateutil.relativedelta.relativedelta(days=1)
-            elif args['--incremental'][-1] == 'M':
-                start_date = end_date - dateutil.relativedelta.relativedelta(months=1)
-            params={
+            start_date = _get_start_date(end_date)
+            params = {
                 'chunked': str(chunked).lower(),
                 'q': "select * from %s where time > %ss and time < %ss" % (conf['table_regex'],
-                                                                            start_date.strftime('%s'),
-                                                                            end_date.strftime('%s'))
+                                                                           start_date.strftime('%s'),
+                                                                           end_date.strftime('%s'))
             }
             json_file = "%s/%s.json" % (working_dir, start_date.strftime('%s'))
             if args['--overwrite'] or not os.path.isfile(json_file):
@@ -130,20 +144,28 @@ def pre_process_backup(db, path, conf, chunked=True):
         while sum(1 for x in results if not x.ready()) > 0:
             time.sleep(30)
 
-if __name__ == '__main__':
-    args = docopt(__doc__, version='Influxdb Backup 0.1')
-    
-    ### Validate incremental input ###
-    if args['--incremental'][-1] not in INCR_MAP.keys():
-        print "--incremental must end with 'm' (minutes), 'h' (hourly), 'd' (daily), 'M' (monthly)"
-        sys.exit(1)
-    try:
-        int(re.sub('[^0-9]', '', args['--incremental']))
-    except ValueError:
-        print "--incremental must start with a number"
-        sys.exit(1)
-    ######
 
+def restore(file_path, db_name, conf):
+    auth = (conf['username'], conf['password'])
+    url = '%s:%d/db/%s/series' % (conf['host'], conf['port'], db_name)
+    session = requests.Session()
+    retries = 5
+    if url.startswith('https'):
+        session.mount("https://", requests.adapters.HTTPAdapter(max_retries=retries))
+    else:
+        session.mount("http://", requests.adapters.HTTPAdapter(max_retries=retries))
+    try:
+        print "Starting: %s" % file_path
+        with open(file_path, 'r') as f:
+            for json_string in f.xreadlines():
+                response = session.post(url, auth=auth, data=("[%s]" % json_string))
+                response.raise_for_status()
+    except Exception as ex:
+        print "INFLUXDB REQUEST FAILED"
+        print sys.exc_info()
+
+
+def _load_config():
     ### Load config file ###
     # set default config file is none given
     if not args['--config']:
@@ -154,11 +176,29 @@ if __name__ == '__main__':
         sys.exit(1)
     # load config file
     with open(args['--config']) as f:
-        config = yaml.safe_load(f)
-    ######
+        return yaml.safe_load(f)
+        ######
 
-    ### backup influxdb ###
+
+if __name__ == '__main__':
+    args = docopt(__doc__, version='Influxdb Backup 0.1')
+
+    config = _load_config()
+
+    ### backup/restore influxdb ###
     if args['backup']:
+
+        ### Validate incremental input ###
+        if args['--incremental'][-1] not in INCR_MAP.keys():
+            print "--incremental must end with 'm' (minutes), 'h' (hourly), 'd' (daily), 'M' (monthly)"
+            sys.exit(1)
+        try:
+            int(re.sub('[^0-9]', '', args['--incremental']))
+        except ValueError:
+            print "--incremental must start with a number"
+            sys.exit(1)
+        ######
+
         for name, conf in config.iteritems():
             print "Backing up: %s" % name
             path = '%s/%s/' % (args['--target'], name)
@@ -173,4 +213,30 @@ if __name__ == '__main__':
                 print "Working Database: %s" % db
                 pre_process_backup(db, path, conf)
         print "done."
-    ######
+    elif args['restore']:
+
+        ### Validate input given
+        if not INPUT:
+            print "Must pipe in (as stdin) a list of files to restore (ie use `ls -1` or `find` commands)"
+            sys.exit(1)
+        else:
+            for i in INPUT:
+                try:
+                    config_name, db_name, _ = i.split('/', 2)
+                except ValueError as ex:
+                    print "Restore files must contain relative path to backup root directory"
+                if config_name not in config:
+                    print "First element (%s) in file path (%s) does not exist as config in configuration file." % (
+                        config_name, i)
+        ####
+
+        pool = Pool(int(args['--workers']))
+        results = []
+        for i in INPUT:
+            config_name, db_name, _ = i.split('/', 2)
+            conf = config[config_name]
+            results.append(pool.apply_async(restore, [i, db_name, conf]))
+        # wait for all threads to finish downloading
+        while sum(1 for x in results if not x.ready()) > 0:
+            time.sleep(10)
+            ######

@@ -55,3 +55,6 @@ target/
 
 # config files
 *.yaml
+
+# ignore pycharm helper files
+.idea/
