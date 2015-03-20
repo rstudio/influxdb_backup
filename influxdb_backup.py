@@ -27,6 +27,8 @@ import os
 import sys
 import re
 import datetime
+import hashlib
+import traceback
 from multiprocessing import Pool
 import time
 
@@ -53,9 +55,15 @@ def get_dbs(conf):
     return dbs
 
 
-def backup(start_date, path, url, auth, params):
+def backup(start_date, json_path, checksum_path, url, auth, params):
+    def remove_files():
+        for p in [json_path, checksum_path]:
+            if os.path.isfile(p):
+                os.remove(path)
+
     session = requests.Session()
     retries = 5
+    checksum = hashlib.sha1()
     if url.startswith('https'):
         session.mount("https://", requests.adapters.HTTPAdapter(max_retries=retries))
     else:
@@ -63,9 +71,8 @@ def backup(start_date, path, url, auth, params):
     try:
         print "Pulling: %s" % start_date
         response = session.get(url, auth=auth, params=params, stream=True)
-        response.raise_for_status()
         print "Writing: %s.json (%s)" % (start_date.strftime('%s'), start_date)
-        with open(path, 'w') as j:
+        with open(json_path, 'w') as j:
             for chunk in response.iter_content():
                 # if chuck has data, write to file.
                 if chunk:
@@ -73,14 +80,22 @@ def backup(start_date, path, url, auth, params):
                     # This makes it easy to restore these files in a scalable wasy
                     # via xreadlines()
                     if chunk.endswith("}"):
-                        j.write(chunk + "\n")
-                    else:
-                        j.write(chunk)
+                        chunk += "\n"
+                    j.write(chunk)
+                    checksum.update(chunk)
+            j.flush()
+        response.raise_for_status()
+        print "Writing checksum: %s.json.sha1 (%s)" % (start_date.strftime('%s'), start_date)
+        with open(checksum_path, 'w') as f:
+            f.write(checksum.hexdigest() + "  " + json_path.split('/')[-1])
+
+        # check that the checksums actually match
+        if not _check_checksum(checksum_path):
+            remove_files()
     except Exception as ex:
-        print "INFLUXDB REQUEST FAILED"
-        print sys.exc_info()
-        if os.path.isfile(path):
-            os.remove(path)
+        print traceback.print_exc()
+        remove_files()
+        raise ex
 
 
 def _get_end_date():
@@ -103,6 +118,18 @@ def _get_start_date(end_date):
         return end_date - dateutil.relativedelta.relativedelta(days=1)
     elif args['--incremental'][-1] == 'M':
         return end_date - dateutil.relativedelta.relativedelta(months=1)
+
+
+def _check_checksum(checksum_path):
+    # read checksum file to get expected checksum value
+    with open(checksum_path, 'r') as f:
+        expected_checksum, file_name = f.read().split()
+
+    # get checksum of the json file
+    with open(os.path.dirname(os.path.realpath(checksum_path)) + "/" + file_name, 'r') as f:
+        real_checksum = hashlib.sha1(f.read()).hexdigest()
+
+    return expected_checksum == real_checksum
 
 
 def pre_process_backup(db, path, conf, chunked=True):
@@ -137,8 +164,10 @@ def pre_process_backup(db, path, conf, chunked=True):
                                                                            end_date.strftime('%s'))
             }
             json_file = "%s/%s.json" % (working_dir, start_date.strftime('%s'))
-            if args['--overwrite'] or not os.path.isfile(json_file):
-                results.append(pool.apply_async(backup, [start_date, json_file, url, auth, params]))
+            checksum_file = json_file + ".sha1"
+            if args['--overwrite'] or not os.path.isfile(json_file) or not os.path.isfile(
+                    checksum_file) or not _check_checksum(checksum_file):
+                results.append(pool.apply_async(backup, [start_date, json_file, checksum_file, url, auth, params]))
             end_date = start_date
         # wait for all threads to finish downloading
         while sum(1 for x in results if not x.ready()) > 0:
