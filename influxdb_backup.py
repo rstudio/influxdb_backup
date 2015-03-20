@@ -126,10 +126,14 @@ def _check_checksum(checksum_path):
         expected_checksum, file_name = f.read().split()
 
     # get checksum of the json file
+    real_checksum = hashlib.sha1()
     with open(os.path.dirname(os.path.realpath(checksum_path)) + "/" + file_name, 'r') as f:
-        real_checksum = hashlib.sha1(f.read()).hexdigest()
+        # since we want to avoid reading the entire file to memory, we'll use xreadlines to calc
+        # the checksum line by line
+        for x in f.xreadlines():
+            real_checksum.update(x)
 
-    return expected_checksum == real_checksum
+    return expected_checksum == real_checksum.hexdigest()
 
 
 def pre_process_backup(db, path, conf, chunked=True):
